@@ -18,7 +18,7 @@ Manage your [YOURLS](https://yourls.org) short links from Telegram: shorten, lis
 | Command | What it does |
 |---|---|
 | `/short <url> [keyword]` | Shortens a URL; keyword is optional (YOURLS generates one if omitted) |
-| `/links [search]` | Shows the 10 most recent links, or matching links if you give a search term |
+| `/links [search]` | Shows the 10 most recent links, or matching links if you give a search term. Each line is a bullet with the clickable `y.faeq.net/...` short link and its click count; a "Show full links" button reveals the real target URLs in place |
 | `/stats <keyword>` | Clicks, target URL and creation date for one link |
 | `/delete <keyword>` | Asks you to confirm (inline Yes/Cancel buttons), then deletes |
 

@@ -3,7 +3,7 @@
 Plugin Name: Telegram Bot
 Plugin URI: https://github.com/dominggo/yourls-telegram-bot
 Description: Manage your short links from Telegram: /short, /links, /stats, /delete. One admin chat only. See this plugin's Settings page (Manage Plugins) to connect your bot.
-Version: 1.0.0
+Version: 1.1.0
 Author: dominggo
 Author URI: https://github.com/dominggo
 */
@@ -159,6 +159,23 @@ function telegrambot_send( $text, $reply_markup = null ) {
     telegrambot_api_call( $token, 'sendMessage', $params );
 }
 
+function telegrambot_edit( $chat_id, $message_id, $text, $reply_markup = null ) {
+    $token = yourls_get_option( TELEGRAMBOT_OPTION_TOKEN );
+    if( !$token ) {
+        return;
+    }
+    $params = array(
+        'chat_id'    => $chat_id,
+        'message_id' => $message_id,
+        'text'       => $text,
+        'parse_mode' => 'HTML',
+    );
+    if( $reply_markup !== null ) {
+        $params['reply_markup'] = json_encode( $reply_markup );
+    }
+    telegrambot_api_call( $token, 'editMessageText', $params );
+}
+
 /* -------------------------------------------------------------------------
  * Webhook entry point (called from webhook.php, which just bootstraps
  * YOURLS and calls this -- see that file).
@@ -230,27 +247,52 @@ function telegrambot_cmd_short( $url, $keyword ) {
     }
 }
 
-function telegrambot_cmd_links( $search ) {
+function telegrambot_fetch_links( $search ) {
     $table = YOURLS_DB_TABLE_URL;
     if( $search !== '' ) {
-        $rows = yourls_get_db()->fetchObjects(
+        return yourls_get_db()->fetchObjects(
             "SELECT keyword, url, clicks FROM `$table` WHERE keyword LIKE :s OR url LIKE :s OR title LIKE :s ORDER BY timestamp DESC LIMIT 10",
             array( 's' => '%' . $search . '%' )
         );
-    } else {
-        $rows = yourls_get_db()->fetchObjects(
-            "SELECT keyword, url, clicks FROM `$table` ORDER BY timestamp DESC LIMIT 10"
-        );
     }
+    return yourls_get_db()->fetchObjects(
+        "SELECT keyword, url, clicks FROM `$table` ORDER BY timestamp DESC LIMIT 10"
+    );
+}
+
+function telegrambot_links_text( $rows, $full ) {
+    $lines = array();
+    foreach( $rows as $row ) {
+        $clicks = (int) $row->clicks;
+        $clicks_label = $clicks . ' click' . ( $clicks === 1 ? '' : 's' );
+        if( $full ) {
+            $lines[] = '&#8226; <b>' . htmlspecialchars( $row->keyword ) . '</b> (' . $clicks_label . ')' .
+                       "\n   " . htmlspecialchars( $row->url );
+        } else {
+            $shorturl = htmlspecialchars( yourls_link( $row->keyword ) );
+            $lines[] = '&#8226; <a href="' . $shorturl . '">' . htmlspecialchars( $row->keyword ) . '</a> &mdash; ' . $clicks_label;
+        }
+    }
+    return implode( "\n\n", $lines );
+}
+
+function telegrambot_links_callback_token( $search ) {
+    // Telegram caps callback_data at 64 bytes; "fulllinks:" is 10, leaving 54 for the search term.
+    $token = $search !== '' ? $search : '_';
+    return substr( $token, 0, 54 );
+}
+
+function telegrambot_cmd_links( $search ) {
+    $rows = telegrambot_fetch_links( $search );
     if( !$rows ) {
         telegrambot_send( 'No links found.' );
         return;
     }
-    $lines = array();
-    foreach( $rows as $row ) {
-        $lines[] = htmlspecialchars( $row->keyword ) . ' (' . (int) $row->clicks . ' clicks) -> ' . htmlspecialchars( $row->url );
-    }
-    telegrambot_send( implode( "\n", $lines ) );
+    $header = $search !== '' ? 'Links matching "' . htmlspecialchars( $search ) . '"' : 'Recent links';
+    $text = '<b>' . $header . "</b>\n\n" . telegrambot_links_text( $rows, false );
+    telegrambot_send( $text, array( 'inline_keyboard' => array( array(
+        array( 'text' => 'Show full links', 'callback_data' => 'fulllinks:' . telegrambot_links_callback_token( $search ) ),
+    ) ) ) );
 }
 
 function telegrambot_cmd_stats( $keyword ) {
@@ -282,10 +324,11 @@ function telegrambot_cmd_delete_confirm( $keyword ) {
 }
 
 function telegrambot_handle_callback( $callback_query, $admin_chat_id ) {
-    $token    = yourls_get_option( TELEGRAMBOT_OPTION_TOKEN );
-    $chat_id  = isset( $callback_query['message']['chat']['id'] ) ? (string) $callback_query['message']['chat']['id'] : '';
-    $data     = isset( $callback_query['data'] ) ? $callback_query['data'] : '';
-    $query_id = isset( $callback_query['id'] ) ? $callback_query['id'] : '';
+    $token      = yourls_get_option( TELEGRAMBOT_OPTION_TOKEN );
+    $chat_id    = isset( $callback_query['message']['chat']['id'] ) ? (string) $callback_query['message']['chat']['id'] : '';
+    $message_id = isset( $callback_query['message']['message_id'] ) ? $callback_query['message']['message_id'] : null;
+    $data       = isset( $callback_query['data'] ) ? $callback_query['data'] : '';
+    $query_id   = isset( $callback_query['id'] ) ? $callback_query['id'] : '';
 
     if( !hash_equals( (string) $admin_chat_id, $chat_id ) ) {
         return;
@@ -306,5 +349,18 @@ function telegrambot_handle_callback( $callback_query, $admin_chat_id ) {
         } else {
             telegrambot_send( 'Already gone: ' . htmlspecialchars( $keyword ) );
         }
+        return;
+    }
+    if( strpos( $data, 'fulllinks:' ) === 0 && $message_id !== null ) {
+        $token_search = substr( $data, 10 );
+        $search = $token_search === '_' ? '' : $token_search;
+        $rows = telegrambot_fetch_links( $search );
+        if( !$rows ) {
+            telegrambot_edit( $chat_id, $message_id, 'No links found.' );
+            return;
+        }
+        $header = $search !== '' ? 'Links matching "' . htmlspecialchars( $search ) . '"' : 'Recent links';
+        $text = '<b>' . $header . "</b>\n\n" . telegrambot_links_text( $rows, true );
+        telegrambot_edit( $chat_id, $message_id, $text ); // no reply_markup: drop the button, this is a one-way reveal
     }
 }
