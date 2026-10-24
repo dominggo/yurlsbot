@@ -246,12 +246,12 @@ function telegrambot_dispatch( $text ) {
     } elseif( preg_match( '/^\/(start|help)/i', $text ) ) {
         telegrambot_send(
             "<b>Telegram Bot for YOURLS</b>\n\n" .
-            "/short &lt;url&gt; [keyword] &mdash; shorten a URL, keyword optional\n" .
-            "/links [search] &mdash; recent links, or matching a search term\n" .
-            "/stats &lt;keyword&gt; &mdash; clicks, target URL and date for one link\n" .
-            "/delete &lt;keyword&gt; &mdash; asks to confirm, then deletes\n" .
-            "/cancel &mdash; cancel an in-progress Update\n\n" .
-            "Each link in /links also has <b>View</b>, <b>Update</b> and <b>Delete</b> buttons &mdash; " .
+            "/short &lt;url&gt; [keyword] \xe2\x80\x94 shorten a URL, keyword optional\n" .
+            "/links [search] \xe2\x80\x94 recent links, or matching a search term\n" .
+            "/stats &lt;keyword&gt; \xe2\x80\x94 clicks, target URL and date for one link\n" .
+            "/delete &lt;keyword&gt; \xe2\x80\x94 asks to confirm, then deletes\n" .
+            "/cancel \xe2\x80\x94 cancel an in-progress Update\n\n" .
+            "Each link in /links also has <b>View</b>, <b>Update</b> and <b>Delete</b> buttons \xe2\x80\x94 " .
             "tap Update, then send the new target URL in your next message."
         );
     }
@@ -291,7 +291,7 @@ function telegrambot_links_text( $rows ) {
         $clicks = (int) $row->clicks;
         $clicks_label = $clicks . ' click' . ( $clicks === 1 ? '' : 's' );
         $shorturl = htmlspecialchars( yourls_link( $row->keyword ) );
-        $lines[] = '&#8226; <a href="' . $shorturl . '">' . htmlspecialchars( $row->keyword ) . '</a> &mdash; ' . $clicks_label;
+        $lines[] = "\xe2\x80\xa2 " . '<a href="' . $shorturl . '">' . htmlspecialchars( $row->keyword ) . "</a> \xe2\x80\x94 " . $clicks_label;
     }
     return implode( "\n\n", $lines );
 }
@@ -361,7 +361,7 @@ function telegrambot_cmd_apply_update( $keyword, $new_url ) {
 
     $result = yourls_edit_link( $new_url, $keyword, $keyword );
     if( !empty( $result['status'] ) && $result['status'] === 'success' ) {
-        telegrambot_send( 'Updated <b>' . htmlspecialchars( $keyword ) . '</b> &rarr; ' . htmlspecialchars( $new_url ) );
+        telegrambot_send( 'Updated <b>' . htmlspecialchars( $keyword ) . "</b> \xe2\x86\x92 " . htmlspecialchars( $new_url ) );
     } else {
         $msg = isset( $result['message'] ) ? $result['message'] : 'unknown error';
         telegrambot_send( 'Could not update: ' . htmlspecialchars( $msg ) );
