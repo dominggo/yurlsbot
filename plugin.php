@@ -2,8 +2,8 @@
 /*
 Plugin Name: Telegram Bot
 Plugin URI: https://github.com/dominggo/yourls-telegram-bot
-Description: Manage your short links from Telegram: /short, /links, /stats, /delete, and per-link View/Update/Delete buttons from /links. One admin chat only. See this plugin's Settings page (Manage Plugins) to connect your bot.
-Version: 1.3.0
+Description: Manage your short links from Telegram: /short, /links (tap a link to View/Update/Delete it), /stats, /delete. One admin chat only. See this plugin's Settings page (Manage Plugins) to connect your bot.
+Version: 1.4.0
 Author: dominggo
 Author URI: https://github.com/dominggo
 */
@@ -84,8 +84,8 @@ function telegrambot_render_page() {
         <h3>Commands</h3>
         <ul>
             <li><code>/short &lt;url&gt; [keyword]</code> &mdash; shorten a URL, optional custom keyword</li>
-            <li><code>/links [search]</code> &mdash; most recent short links, or matching a search term &mdash; each one has
-                <b>View</b>, <b>Update</b> and <b>Delete</b> buttons</li>
+            <li><code>/links [search]</code> &mdash; most recent short links, or matching a search term &mdash; tap a link's
+                name to get <b>View</b>, <b>Update</b> and <b>Delete</b> buttons for just that one</li>
             <li><code>/stats &lt;keyword&gt;</code> &mdash; clicks, target URL and date for one short link</li>
             <li><code>/delete &lt;keyword&gt;</code> &mdash; asks to confirm, then deletes</li>
             <li><code>/cancel</code> &mdash; cancel an in-progress Update (after tapping a link's Update button)</li>
@@ -251,7 +251,7 @@ function telegrambot_dispatch( $text ) {
             "/stats &lt;keyword&gt; \xe2\x80\x94 clicks, target URL and date for one link\n" .
             "/delete &lt;keyword&gt; \xe2\x80\x94 asks to confirm, then deletes\n" .
             "/cancel \xe2\x80\x94 cancel an in-progress Update\n\n" .
-            "Each link in /links also has <b>View</b>, <b>Update</b> and <b>Delete</b> buttons \xe2\x80\x94 " .
+            "In /links, tap a link's name to get View/Update/Delete buttons for just that one \xe2\x80\x94 " .
             "tap Update, then send the new target URL in your next message."
         );
     }
@@ -307,14 +307,26 @@ function telegrambot_cmd_links( $search ) {
 
     $keyboard = array();
     foreach( $rows as $row ) {
-        $kw = $row->keyword;
         $keyboard[] = array(
-            array( 'text' => 'View',   'callback_data' => 'lview:'   . $kw ),
-            array( 'text' => 'Update', 'callback_data' => 'lupd:'    . $kw ),
-            array( 'text' => 'Delete', 'callback_data' => 'ldelask:' . $kw ),
+            array( 'text' => $row->keyword, 'callback_data' => 'sel:' . $row->keyword ),
         );
     }
     telegrambot_send( $text, array( 'inline_keyboard' => $keyboard ) );
+}
+
+function telegrambot_cmd_select( $keyword ) {
+    if( !yourls_keyword_is_taken( $keyword ) ) {
+        telegrambot_send( 'Unknown keyword: ' . htmlspecialchars( $keyword ) );
+        return;
+    }
+    telegrambot_send(
+        '<b>' . htmlspecialchars( $keyword ) . '</b>',
+        array( 'inline_keyboard' => array( array(
+            array( 'text' => 'View',   'callback_data' => 'lview:'   . $keyword ),
+            array( 'text' => 'Update', 'callback_data' => 'lupd:'    . $keyword ),
+            array( 'text' => 'Delete', 'callback_data' => 'ldelask:' . $keyword ),
+        ) ) )
+    );
 }
 
 function telegrambot_cmd_stats( $keyword ) {
@@ -393,6 +405,10 @@ function telegrambot_handle_callback( $callback_query, $admin_chat_id ) {
         } else {
             telegrambot_send( 'Already gone: ' . htmlspecialchars( $keyword ) );
         }
+        return;
+    }
+    if( strpos( $data, 'sel:' ) === 0 ) {
+        telegrambot_cmd_select( substr( $data, 4 ) );
         return;
     }
     if( strpos( $data, 'lview:' ) === 0 ) {
