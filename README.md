@@ -1,6 +1,6 @@
 # YOURLS Telegram Bot
 
-Manage your [YOURLS](https://yourls.org) short links from Telegram: shorten, list, check stats, delete — from one admin chat.
+Manage your [YOURLS](https://yourls.org) short links from Telegram: shorten, list, view, update, delete — from one admin chat.
 
 ## Install
 
@@ -18,9 +18,13 @@ Manage your [YOURLS](https://yourls.org) short links from Telegram: shorten, lis
 | Command | What it does |
 |---|---|
 | `/short <url> [keyword]` | Shortens a URL; keyword is optional (YOURLS generates one if omitted) |
-| `/links [search]` | Shows the 10 most recent links, or matching links if you give a search term. Each line is a bullet with the clickable `y.faeq.net/...` short link and its click count; a "Show full links" button reveals the real target URLs in place |
+| `/links [search]` | Shows the 10 most recent links, or matching links if you give a search term. Each line is a bullet with the clickable short link and its click count, plus **View** / **Update** / **Delete** buttons |
 | `/stats <keyword>` | Clicks, target URL and creation date for one link |
 | `/delete <keyword>` | Asks you to confirm (inline Yes/Cancel buttons), then deletes |
+| `/cancel` | Cancels an in-progress Update (after tapping a link's Update button) |
+| `/help` (or `/start`) | Shows the command list inside Telegram |
+
+Tapping **Update** on a link asks you to send the new target URL as your next message (or `/cancel`) — no need to retype the command or keyword.
 
 Only the chat id you configured gets a reply — the bot is silent to everyone else, including group chats it might be added to.
 

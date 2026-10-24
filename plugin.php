@@ -2,8 +2,8 @@
 /*
 Plugin Name: Telegram Bot
 Plugin URI: https://github.com/dominggo/yourls-telegram-bot
-Description: Manage your short links from Telegram: /short, /links, /stats, /delete. One admin chat only. See this plugin's Settings page (Manage Plugins) to connect your bot.
-Version: 1.1.0
+Description: Manage your short links from Telegram: /short, /links, /stats, /delete, and per-link View/Update/Delete buttons from /links. One admin chat only. See this plugin's Settings page (Manage Plugins) to connect your bot.
+Version: 1.2.0
 Author: dominggo
 Author URI: https://github.com/dominggo
 */
@@ -14,6 +14,7 @@ if( !defined( 'YOURLS_ABSPATH' ) ) die();
 define( 'TELEGRAMBOT_OPTION_TOKEN',   'telegrambot_token' );
 define( 'TELEGRAMBOT_OPTION_CHATID',  'telegrambot_admin_chat_id' );
 define( 'TELEGRAMBOT_OPTION_SECRET',  'telegrambot_webhook_secret' );
+define( 'TELEGRAMBOT_OPTION_PENDING', 'telegrambot_pending_update' ); // keyword awaiting a new URL, or ''
 define( 'TELEGRAMBOT_PAGE_SLUG',      'telegram-bot' );
 
 /* -------------------------------------------------------------------------
@@ -82,9 +83,12 @@ function telegrambot_render_page() {
         <h3>Commands</h3>
         <ul>
             <li><code>/short &lt;url&gt; [keyword]</code> &mdash; shorten a URL, optional custom keyword</li>
-            <li><code>/links [search]</code> &mdash; most recent short links, or matching a search term</li>
+            <li><code>/links [search]</code> &mdash; most recent short links, or matching a search term &mdash; each one has
+                <b>View</b>, <b>Update</b> and <b>Delete</b> buttons</li>
             <li><code>/stats &lt;keyword&gt;</code> &mdash; clicks, target URL and date for one short link</li>
             <li><code>/delete &lt;keyword&gt;</code> &mdash; asks to confirm, then deletes</li>
+            <li><code>/cancel</code> &mdash; cancel an in-progress Update (after tapping a link's Update button)</li>
+            <li><code>/help</code> (or <code>/start</code>) &mdash; shows this command list inside Telegram</li>
         </ul>
 HTML;
 }
@@ -159,23 +163,6 @@ function telegrambot_send( $text, $reply_markup = null ) {
     telegrambot_api_call( $token, 'sendMessage', $params );
 }
 
-function telegrambot_edit( $chat_id, $message_id, $text, $reply_markup = null ) {
-    $token = yourls_get_option( TELEGRAMBOT_OPTION_TOKEN );
-    if( !$token ) {
-        return;
-    }
-    $params = array(
-        'chat_id'    => $chat_id,
-        'message_id' => $message_id,
-        'text'       => $text,
-        'parse_mode' => 'HTML',
-    );
-    if( $reply_markup !== null ) {
-        $params['reply_markup'] = json_encode( $reply_markup );
-    }
-    telegrambot_api_call( $token, 'editMessageText', $params );
-}
-
 /* -------------------------------------------------------------------------
  * Webhook entry point (called from webhook.php, which just bootstraps
  * YOURLS and calls this -- see that file).
@@ -212,6 +199,19 @@ function telegrambot_handle_webhook() {
         exit; // silent to everyone but the configured admin
     }
 
+    $pending = yourls_get_option( TELEGRAMBOT_OPTION_PENDING );
+    if( $pending && substr( $text, 0, 1 ) !== '/' ) {
+        telegrambot_cmd_apply_update( $pending, $text );
+        return;
+    }
+    if( $pending ) {
+        yourls_update_option( TELEGRAMBOT_OPTION_PENDING, '' ); // any slash command abandons the pending update
+        if( preg_match( '/^\/cancel/i', $text ) ) {
+            telegrambot_send( 'Cancelled.' );
+            return;
+        }
+    }
+
     telegrambot_dispatch( $text );
 }
 
@@ -226,8 +226,14 @@ function telegrambot_dispatch( $text ) {
         telegrambot_cmd_delete_confirm( $m[1] );
     } elseif( preg_match( '/^\/(start|help)/i', $text ) ) {
         telegrambot_send(
-            "<b>Telegram Bot for YOURLS</b>\n" .
-            "/short &lt;url&gt; [keyword]\n/links [search]\n/stats &lt;keyword&gt;\n/delete &lt;keyword&gt;"
+            "<b>Telegram Bot for YOURLS</b>\n\n" .
+            "/short &lt;url&gt; [keyword] &mdash; shorten a URL, keyword optional\n" .
+            "/links [search] &mdash; recent links, or matching a search term\n" .
+            "/stats &lt;keyword&gt; &mdash; clicks, target URL and date for one link\n" .
+            "/delete &lt;keyword&gt; &mdash; asks to confirm, then deletes\n" .
+            "/cancel &mdash; cancel an in-progress Update\n\n" .
+            "Each link in /links also has <b>View</b>, <b>Update</b> and <b>Delete</b> buttons &mdash; " .
+            "tap Update, then send the new target URL in your next message."
         );
     }
     // anything else: silently ignored, same as accessbot's convention
@@ -260,26 +266,15 @@ function telegrambot_fetch_links( $search ) {
     );
 }
 
-function telegrambot_links_text( $rows, $full ) {
+function telegrambot_links_text( $rows ) {
     $lines = array();
     foreach( $rows as $row ) {
         $clicks = (int) $row->clicks;
         $clicks_label = $clicks . ' click' . ( $clicks === 1 ? '' : 's' );
-        if( $full ) {
-            $lines[] = '&#8226; <b>' . htmlspecialchars( $row->keyword ) . '</b> (' . $clicks_label . ')' .
-                       "\n   " . htmlspecialchars( $row->url );
-        } else {
-            $shorturl = htmlspecialchars( yourls_link( $row->keyword ) );
-            $lines[] = '&#8226; <a href="' . $shorturl . '">' . htmlspecialchars( $row->keyword ) . '</a> &mdash; ' . $clicks_label;
-        }
+        $shorturl = htmlspecialchars( yourls_link( $row->keyword ) );
+        $lines[] = '&#8226; <a href="' . $shorturl . '">' . htmlspecialchars( $row->keyword ) . '</a> &mdash; ' . $clicks_label;
     }
     return implode( "\n\n", $lines );
-}
-
-function telegrambot_links_callback_token( $search ) {
-    // Telegram caps callback_data at 64 bytes; "fulllinks:" is 10, leaving 54 for the search term.
-    $token = $search !== '' ? $search : '_';
-    return substr( $token, 0, 54 );
 }
 
 function telegrambot_cmd_links( $search ) {
@@ -289,10 +284,18 @@ function telegrambot_cmd_links( $search ) {
         return;
     }
     $header = $search !== '' ? 'Links matching "' . htmlspecialchars( $search ) . '"' : 'Recent links';
-    $text = '<b>' . $header . "</b>\n\n" . telegrambot_links_text( $rows, false );
-    telegrambot_send( $text, array( 'inline_keyboard' => array( array(
-        array( 'text' => 'Show full links', 'callback_data' => 'fulllinks:' . telegrambot_links_callback_token( $search ) ),
-    ) ) ) );
+    $text = '<b>' . $header . "</b>\n\n" . telegrambot_links_text( $rows );
+
+    $keyboard = array();
+    foreach( $rows as $row ) {
+        $kw = $row->keyword;
+        $keyboard[] = array(
+            array( 'text' => 'View',   'callback_data' => 'lview:'   . $kw ),
+            array( 'text' => 'Update', 'callback_data' => 'lupd:'    . $kw ),
+            array( 'text' => 'Delete', 'callback_data' => 'ldelask:' . $kw ),
+        );
+    }
+    telegrambot_send( $text, array( 'inline_keyboard' => $keyboard ) );
 }
 
 function telegrambot_cmd_stats( $keyword ) {
@@ -323,12 +326,34 @@ function telegrambot_cmd_delete_confirm( $keyword ) {
     );
 }
 
+function telegrambot_cmd_apply_update( $keyword, $new_url ) {
+    yourls_update_option( TELEGRAMBOT_OPTION_PENDING, '' );
+
+    if( !yourls_keyword_is_taken( $keyword ) ) {
+        telegrambot_send( 'That link is gone now: ' . htmlspecialchars( $keyword ) );
+        return;
+    }
+    if( !filter_var( $new_url, FILTER_VALIDATE_URL ) || !preg_match( '#^https?://#i', $new_url ) ) {
+        // put it back so they can just resend without tapping Update again
+        yourls_update_option( TELEGRAMBOT_OPTION_PENDING, $keyword );
+        telegrambot_send( 'Not a valid http(s) URL. Send the new target URL for <b>' . htmlspecialchars( $keyword ) . '</b> (or /cancel).' );
+        return;
+    }
+
+    $result = yourls_edit_link( $new_url, $keyword, $keyword );
+    if( !empty( $result['status'] ) && $result['status'] === 'success' ) {
+        telegrambot_send( 'Updated <b>' . htmlspecialchars( $keyword ) . '</b> &rarr; ' . htmlspecialchars( $new_url ) );
+    } else {
+        $msg = isset( $result['message'] ) ? $result['message'] : 'unknown error';
+        telegrambot_send( 'Could not update: ' . htmlspecialchars( $msg ) );
+    }
+}
+
 function telegrambot_handle_callback( $callback_query, $admin_chat_id ) {
-    $token      = yourls_get_option( TELEGRAMBOT_OPTION_TOKEN );
-    $chat_id    = isset( $callback_query['message']['chat']['id'] ) ? (string) $callback_query['message']['chat']['id'] : '';
-    $message_id = isset( $callback_query['message']['message_id'] ) ? $callback_query['message']['message_id'] : null;
-    $data       = isset( $callback_query['data'] ) ? $callback_query['data'] : '';
-    $query_id   = isset( $callback_query['id'] ) ? $callback_query['id'] : '';
+    $token    = yourls_get_option( TELEGRAMBOT_OPTION_TOKEN );
+    $chat_id  = isset( $callback_query['message']['chat']['id'] ) ? (string) $callback_query['message']['chat']['id'] : '';
+    $data     = isset( $callback_query['data'] ) ? $callback_query['data'] : '';
+    $query_id = isset( $callback_query['id'] ) ? $callback_query['id'] : '';
 
     if( !hash_equals( (string) $admin_chat_id, $chat_id ) ) {
         return;
@@ -351,16 +376,21 @@ function telegrambot_handle_callback( $callback_query, $admin_chat_id ) {
         }
         return;
     }
-    if( strpos( $data, 'fulllinks:' ) === 0 && $message_id !== null ) {
-        $token_search = substr( $data, 10 );
-        $search = $token_search === '_' ? '' : $token_search;
-        $rows = telegrambot_fetch_links( $search );
-        if( !$rows ) {
-            telegrambot_edit( $chat_id, $message_id, 'No links found.' );
+    if( strpos( $data, 'lview:' ) === 0 ) {
+        telegrambot_cmd_stats( substr( $data, 6 ) );
+        return;
+    }
+    if( strpos( $data, 'ldelask:' ) === 0 ) {
+        telegrambot_cmd_delete_confirm( substr( $data, 8 ) );
+        return;
+    }
+    if( strpos( $data, 'lupd:' ) === 0 ) {
+        $keyword = substr( $data, 5 );
+        if( !yourls_keyword_is_taken( $keyword ) ) {
+            telegrambot_send( 'Unknown keyword: ' . htmlspecialchars( $keyword ) );
             return;
         }
-        $header = $search !== '' ? 'Links matching "' . htmlspecialchars( $search ) . '"' : 'Recent links';
-        $text = '<b>' . $header . "</b>\n\n" . telegrambot_links_text( $rows, true );
-        telegrambot_edit( $chat_id, $message_id, $text ); // no reply_markup: drop the button, this is a one-way reveal
+        yourls_update_option( TELEGRAMBOT_OPTION_PENDING, $keyword );
+        telegrambot_send( 'Send the new target URL for <b>' . htmlspecialchars( $keyword ) . '</b> (or /cancel).' );
     }
 }
