@@ -44,9 +44,21 @@ function telegrambot_render_page() {
 
     echo <<<HTML
         <h2>Telegram Bot</h2>
-        <p>Run your own bot: message <a href="https://t.me/BotFather">@BotFather</a> &rarr; <code>/newbot</code> &rarr; paste the token below.
-        Then send any message to your new bot once, and open <a href="https://api.telegram.org/bot&lt;token&gt;/getUpdates">getUpdates</a>
-        in a browser (with your real token) to find your numeric chat id.</p>
+
+        <h3>Setup</h3>
+        <ol>
+            <li>Message <a href="https://t.me/BotFather">@BotFather</a> on Telegram &rarr; send <code>/newbot</code> &rarr; follow the
+                prompts (pick a name and a <code>@username</code> ending in <code>bot</code>) &rarr; it gives you a token like
+                <code>123456789:AA...</code>.</li>
+            <li>Send any message (e.g. "hi") to your new bot, then open this in a browser with your real token:<br>
+                <code>https://api.telegram.org/bot&lt;your-token&gt;/getUpdates</code><br>
+                Look for <code>"chat":{"id":...}</code> in the JSON &mdash; that number is your chat id.</li>
+            <li>Paste both into the form below and click <b>Save &amp; register webhook</b>. This also calls Telegram's
+                <code>setWebhook</code> for you automatically &mdash; you'll see a green "Webhook registered with Telegram"
+                confirmation (or a red error if something's off, e.g. a bad token).</li>
+            <li>Test it: message your bot <code>/start</code> &mdash; it should reply with the command list. Then try
+                <code>/short https://example.com</code> to confirm the whole chain works end to end.</li>
+        </ol>
 
         <form method="post">
         <input type="hidden" name="nonce" value="$nonce" />
@@ -60,11 +72,12 @@ function telegrambot_render_page() {
         <p><input type="submit" name="telegrambot_submit" value="Save &amp; register webhook" /></p>
         </form>
 
-        <h3>Webhook</h3>
-        <p><code>$webhook_url</code></p>
-        <p>Saving the form above also calls Telegram's <code>setWebhook</code> for you — you don't need to call it yourself.</p>
-
         $notice
+
+        <h3>Webhook URL</h3>
+        <p><code>$webhook_url</code></p>
+        <p><small>You don't need to call Telegram's <code>setWebhook</code> yourself &mdash; step 3 above does it. This is just
+        here for reference / troubleshooting.</small></p>
 
         <h3>Commands</h3>
         <ul>

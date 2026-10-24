@@ -5,10 +5,13 @@ Manage your [YOURLS](https://yourls.org) short links from Telegram: shorten, lis
 ## Install
 
 1. Drop this folder into `user/plugins/` in your YOURLS install, so you end up with `user/plugins/telegram-bot/plugin.php`.
-2. In YOURLS admin → **Manage Plugins**, **Activate** "Telegram Bot".
-3. On Telegram, message [@BotFather](https://t.me/BotFather) → `/newbot` → copy the token it gives you.
-4. Send any message to your new bot, then open `https://api.telegram.org/bot<your-token>/getUpdates` in a browser to find your numeric chat id (`message.chat.id`).
-5. In YOURLS admin, open the plugin's **Settings** page (next to it on Manage Plugins), paste the token and chat id, and save. The plugin registers the webhook with Telegram for you — no manual `setWebhook` call needed.
+2. In YOURLS admin → **Manage Plugins**, **Activate** "Telegram Bot". A new "Telegram Bot" link appears in the admin menu.
+3. Message [@BotFather](https://t.me/BotFather) on Telegram → send `/newbot` → follow the prompts (pick a name and a `@username` ending in `bot`) → it gives you a token like `123456789:AA...`.
+4. Send any message (e.g. "hi") to your new bot, then open this in a browser with your real token:
+   `https://api.telegram.org/bot<your-token>/getUpdates`
+   Look for `"chat":{"id":...}` in the JSON — that number is your chat id.
+5. Open the plugin's settings page (`your-site/admin/plugins.php?page=telegram-bot`, or the "Telegram Bot" admin menu link), paste the token and chat id, and click **Save & register webhook**. This also calls Telegram's `setWebhook` for you automatically — you'll see a green "Webhook registered with Telegram" confirmation (or a red error if something's off, e.g. a bad token).
+6. Test it: message your bot `/start` — it should reply with the command list. Then try `/short https://example.com` to confirm the whole chain works end to end.
 
 ## Commands
 
