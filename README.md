@@ -10,7 +10,7 @@ Manage your [YOURLS](https://yourls.org) short links from Telegram: shorten, lis
 4. Send any message (e.g. "hi") to your new bot, then open this in a browser with your real token:
    `https://api.telegram.org/bot<your-token>/getUpdates`
    Look for `"chat":{"id":...}` in the JSON — that number is your chat id.
-5. Open the plugin's settings page (`your-site/admin/plugins.php?page=telegram-bot`, or the "Telegram Bot" admin menu link), paste the token and chat id, and click **Save & register webhook**. This also calls Telegram's `setWebhook` for you automatically — you'll see a green "Webhook registered with Telegram" confirmation (or a red error if something's off, e.g. a bad token).
+5. Open the plugin's settings page (`your-site/admin/plugins.php?page=telegram-bot`, or the "Telegram Bot" admin menu link), paste the token and chat id, and click **Save & register webhook**. This also calls Telegram's `setWebhook` for you automatically (and `setMyCommands`, so the "/" menu in Telegram shows every command with a description) — you'll see a green "Webhook registered with Telegram" confirmation (or a red error if something's off, e.g. a bad token).
 6. Test it: message your bot `/start` — it should reply with the command list. Then try `/short https://example.com` to confirm the whole chain works end to end.
 
 ## Commands

@@ -3,7 +3,7 @@
 Plugin Name: Telegram Bot
 Plugin URI: https://github.com/dominggo/yourls-telegram-bot
 Description: Manage your short links from Telegram: /short, /links, /stats, /delete, and per-link View/Update/Delete buttons from /links. One admin chat only. See this plugin's Settings page (Manage Plugins) to connect your bot.
-Version: 1.2.0
+Version: 1.3.0
 Author: dominggo
 Author URI: https://github.com/dominggo
 */
@@ -55,7 +55,8 @@ function telegrambot_render_page() {
                 <code>https://api.telegram.org/bot&lt;your-token&gt;/getUpdates</code><br>
                 Look for <code>"chat":{"id":...}</code> in the JSON &mdash; that number is your chat id.</li>
             <li>Paste both into the form below and click <b>Save &amp; register webhook</b>. This also calls Telegram's
-                <code>setWebhook</code> for you automatically &mdash; you'll see a green "Webhook registered with Telegram"
+                <code>setWebhook</code> and <code>setMyCommands</code> for you automatically (so the "/" menu in Telegram shows
+                every command with a description) &mdash; you'll see a green "Webhook registered with Telegram"
                 confirmation (or a red error if something's off, e.g. a bad token).</li>
             <li>Test it: message your bot <code>/start</code> &mdash; it should reply with the command list. Then try
                 <code>/short https://example.com</code> to confirm the whole chain works end to end.</li>
@@ -117,11 +118,29 @@ function telegrambot_save_settings() {
         'secret_token' => yourls_get_option( TELEGRAMBOT_OPTION_SECRET ),
     ) );
 
+    telegrambot_api_call( $token, 'setMyCommands', array(
+        'commands' => json_encode( telegrambot_bot_commands() ),
+    ) );
+
     if( $result && !empty( $result['ok'] ) ) {
         return '<p style="color:green">Saved. Webhook registered with Telegram.</p>';
     }
     $desc = isset( $result['description'] ) ? htmlspecialchars( $result['description'] ) : 'no response';
     return "<p style=\"color:red\">Saved, but Telegram's setWebhook failed: $desc</p>";
+}
+
+/**
+ * The "/" command menu Telegram shows for this bot (setMyCommands).
+ */
+function telegrambot_bot_commands() {
+    return array(
+        array( 'command' => 'short',  'description' => 'Shorten a URL: /short <url> [keyword]' ),
+        array( 'command' => 'links',  'description' => 'List/search short links: /links [search]' ),
+        array( 'command' => 'stats',  'description' => 'Stats for one link: /stats <keyword>' ),
+        array( 'command' => 'delete', 'description' => 'Delete a link: /delete <keyword>' ),
+        array( 'command' => 'cancel', 'description' => 'Cancel an in-progress Update' ),
+        array( 'command' => 'help',   'description' => 'Show this command list' ),
+    );
 }
 
 function telegrambot_random_secret() {
