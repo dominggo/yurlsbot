@@ -2,8 +2,8 @@
 /*
 Plugin Name: Telegram Bot
 Plugin URI: https://github.com/dominggo/yourls-telegram-bot
-Description: Manage your short links from Telegram: /short, /links (tap a link to View/Update/Delete it), /stats, /delete. One admin chat only. See this plugin's Settings page (Manage Plugins) to connect your bot.
-Version: 1.4.0
+Description: Manage your short links from Telegram: just send a URL to shorten it, or use /short, /links (tap a link to View/Update/Delete it), /stats, /delete. One admin chat only. See this plugin's Settings page (Manage Plugins) to connect your bot.
+Version: 1.6.0
 Author: dominggo
 Author URI: https://github.com/dominggo
 */
@@ -14,7 +14,7 @@ if( !defined( 'YOURLS_ABSPATH' ) ) die();
 define( 'TELEGRAMBOT_OPTION_TOKEN',   'telegrambot_token' );
 define( 'TELEGRAMBOT_OPTION_CHATID',  'telegrambot_admin_chat_id' );
 define( 'TELEGRAMBOT_OPTION_SECRET',  'telegrambot_webhook_secret' );
-define( 'TELEGRAMBOT_OPTION_PENDING', 'telegrambot_pending_update' ); // keyword awaiting a new URL, or ''
+define( 'TELEGRAMBOT_OPTION_PENDING', 'telegrambot_pending_update' ); // JSON {type, ...} awaiting the admin's next message, or ''
 define( 'TELEGRAMBOT_PAGE_SLUG',      'telegram-bot' );
 
 /* -------------------------------------------------------------------------
@@ -83,12 +83,14 @@ function telegrambot_render_page() {
 
         <h3>Commands</h3>
         <ul>
-            <li><code>/short &lt;url&gt; [keyword]</code> &mdash; shorten a URL, optional custom keyword</li>
+            <li>Just send a URL &mdash; the bot checks it looks like a real link, then asks for a keyword
+                (or <code>/skip</code> to auto-generate one)</li>
+            <li><code>/short &lt;url&gt; [keyword]</code> &mdash; shorten a URL in one message, optional custom keyword</li>
             <li><code>/links [search]</code> &mdash; most recent short links, or matching a search term &mdash; tap a link's
                 name to get <b>View</b>, <b>Update</b> and <b>Delete</b> buttons for just that one</li>
             <li><code>/stats &lt;keyword&gt;</code> &mdash; clicks, target URL and date for one short link</li>
             <li><code>/delete &lt;keyword&gt;</code> &mdash; asks to confirm, then deletes</li>
-            <li><code>/cancel</code> &mdash; cancel an in-progress Update (after tapping a link's Update button)</li>
+            <li><code>/cancel</code> &mdash; cancel an in-progress Add or Update</li>
             <li><code>/help</code> (or <code>/start</code>) &mdash; shows this command list inside Telegram</li>
         </ul>
 HTML;
@@ -138,7 +140,8 @@ function telegrambot_bot_commands() {
         array( 'command' => 'links',  'description' => 'List/search short links: /links [search]' ),
         array( 'command' => 'stats',  'description' => 'Stats for one link: /stats <keyword>' ),
         array( 'command' => 'delete', 'description' => 'Delete a link: /delete <keyword>' ),
-        array( 'command' => 'cancel', 'description' => 'Cancel an in-progress Update' ),
+        array( 'command' => 'skip',   'description' => 'While adding a link, use an auto-generated keyword' ),
+        array( 'command' => 'cancel', 'description' => 'Cancel an in-progress Add or Update' ),
         array( 'command' => 'help',   'description' => 'Show this command list' ),
     );
 }
@@ -182,10 +185,49 @@ function telegrambot_send( $text, $reply_markup = null ) {
     telegrambot_api_call( $token, 'sendMessage', $params );
 }
 
+function telegrambot_edit_markup( $chat_id, $message_id, $reply_markup ) {
+    $token = yourls_get_option( TELEGRAMBOT_OPTION_TOKEN );
+    if( !$token ) {
+        return;
+    }
+    telegrambot_api_call( $token, 'editMessageReplyMarkup', array(
+        'chat_id'      => $chat_id,
+        'message_id'   => $message_id,
+        'reply_markup' => json_encode( $reply_markup ),
+    ) );
+}
+
 /* -------------------------------------------------------------------------
  * Webhook entry point (called from webhook.php, which just bootstraps
  * YOURLS and calls this -- see that file).
  * ---------------------------------------------------------------------- */
+
+/* -------------------------------------------------------------------------
+ * Pending state: what the admin's NEXT plain-text message means, if anything
+ * (e.g. "the keyword for this URL I just asked about"). One slot only --
+ * starting a new guided flow (Update or Add) replaces whatever was pending.
+ * ---------------------------------------------------------------------- */
+
+function telegrambot_pending_get() {
+    $raw = yourls_get_option( TELEGRAMBOT_OPTION_PENDING );
+    if( !$raw ) {
+        return null;
+    }
+    $data = json_decode( $raw, true );
+    return is_array( $data ) ? $data : null;
+}
+
+function telegrambot_pending_set( $data ) {
+    yourls_update_option( TELEGRAMBOT_OPTION_PENDING, json_encode( $data ) );
+}
+
+function telegrambot_pending_clear() {
+    yourls_update_option( TELEGRAMBOT_OPTION_PENDING, '' );
+}
+
+function telegrambot_is_valid_url( $url ) {
+    return filter_var( $url, FILTER_VALIDATE_URL ) && preg_match( '#^https?://#i', $url );
+}
 
 function telegrambot_handle_webhook() {
     $secret = yourls_get_option( TELEGRAMBOT_OPTION_SECRET );
@@ -218,17 +260,37 @@ function telegrambot_handle_webhook() {
         exit; // silent to everyone but the configured admin
     }
 
-    $pending = yourls_get_option( TELEGRAMBOT_OPTION_PENDING );
-    if( $pending && substr( $text, 0, 1 ) !== '/' ) {
-        telegrambot_cmd_apply_update( $pending, $text );
+    $pending   = telegrambot_pending_get();
+    $is_slash  = substr( $text, 0, 1 ) === '/';
+
+    if( $pending && !$is_slash ) {
+        if( $pending['type'] === 'update' ) {
+            telegrambot_cmd_apply_update( $pending['keyword'], $text );
+        } elseif( $pending['type'] === 'add' ) {
+            telegrambot_cmd_guided_add_keyword( $pending['url'], $text );
+        }
         return;
     }
-    if( $pending ) {
-        yourls_update_option( TELEGRAMBOT_OPTION_PENDING, '' ); // any slash command abandons the pending update
+    if( $pending && $is_slash ) {
+        $abandoning_type = $pending['type'];
+        telegrambot_pending_clear(); // any slash command abandons whatever was pending
         if( preg_match( '/^\/cancel/i', $text ) ) {
             telegrambot_send( 'Cancelled.' );
             return;
         }
+        if( $abandoning_type === 'add' && preg_match( '/^\/skip/i', $text ) ) {
+            telegrambot_cmd_guided_add_keyword( $pending['url'], '' );
+            return;
+        }
+    }
+
+    if( !$is_slash && telegrambot_is_valid_url( $text ) ) {
+        telegrambot_cmd_guided_add_url( $text );
+        return;
+    }
+    if( !$is_slash ) {
+        telegrambot_send( "That doesn't look like a URL. Send a link starting with http:// or https://, or try /help." );
+        return;
     }
 
     telegrambot_dispatch( $text );
@@ -246,11 +308,13 @@ function telegrambot_dispatch( $text ) {
     } elseif( preg_match( '/^\/(start|help)/i', $text ) ) {
         telegrambot_send(
             "<b>Telegram Bot for YOURLS</b>\n\n" .
-            "/short &lt;url&gt; [keyword] \xe2\x80\x94 shorten a URL, keyword optional\n" .
+            "Just send a URL and I'll ask for a keyword \xe2\x80\x94 or:\n" .
+            "/short &lt;url&gt; [keyword] \xe2\x80\x94 shorten a URL in one message\n" .
             "/links [search] \xe2\x80\x94 recent links, or matching a search term\n" .
             "/stats &lt;keyword&gt; \xe2\x80\x94 clicks, target URL and date for one link\n" .
             "/delete &lt;keyword&gt; \xe2\x80\x94 asks to confirm, then deletes\n" .
-            "/cancel \xe2\x80\x94 cancel an in-progress Update\n\n" .
+            "/skip \xe2\x80\x94 while adding a link, use an auto-generated keyword\n" .
+            "/cancel \xe2\x80\x94 cancel an in-progress Add or Update\n\n" .
             "In /links, tap a link's name to get View/Update/Delete buttons for just that one \xe2\x80\x94 " .
             "tap Update, then send the new target URL in your next message."
         );
@@ -258,8 +322,8 @@ function telegrambot_dispatch( $text ) {
     // anything else: silently ignored, same as accessbot's convention
 }
 
-function telegrambot_cmd_short( $url, $keyword ) {
-    if( !filter_var( $url, FILTER_VALIDATE_URL ) || !preg_match( '#^https?://#i', $url ) ) {
+function telegrambot_create_link( $url, $keyword ) {
+    if( !telegrambot_is_valid_url( $url ) ) {
         telegrambot_send( 'Not a valid http(s) URL.' );
         return;
     }
@@ -270,6 +334,30 @@ function telegrambot_cmd_short( $url, $keyword ) {
         $msg = isset( $result['message'] ) ? $result['message'] : 'unknown error';
         telegrambot_send( 'Could not shorten: ' . htmlspecialchars( $msg ) );
     }
+}
+
+function telegrambot_cmd_short( $url, $keyword ) {
+    telegrambot_create_link( $url, $keyword );
+}
+
+function telegrambot_cmd_guided_add_url( $url ) {
+    telegrambot_pending_set( array( 'type' => 'add', 'url' => $url ) );
+    telegrambot_send(
+        'Got it: ' . htmlspecialchars( $url ) . "\n" .
+        'Send a short keyword for this link (letters/numbers), or /skip to auto-generate one, or /cancel.'
+    );
+}
+
+function telegrambot_cmd_guided_add_keyword( $url, $keyword_input ) {
+    telegrambot_pending_clear();
+    $keyword = trim( $keyword_input );
+    if( $keyword !== '' && !preg_match( '/^[a-zA-Z0-9_-]+$/', $keyword ) ) {
+        // put it back so they can just resend without starting over
+        telegrambot_pending_set( array( 'type' => 'add', 'url' => $url ) );
+        telegrambot_send( 'Keywords can only use letters, numbers, - and _. Try again, or /skip, or /cancel.' );
+        return;
+    }
+    telegrambot_create_link( $url, $keyword );
 }
 
 function telegrambot_fetch_links( $search ) {
@@ -296,6 +384,22 @@ function telegrambot_links_text( $rows ) {
     return implode( "\n\n", $lines );
 }
 
+function telegrambot_search_token( $search ) {
+    // Telegram caps callback_data at 64 bytes; keep this short so "sel:<token>|<keyword>" always fits.
+    return $search !== '' ? substr( $search, 0, 20 ) : '_';
+}
+
+function telegrambot_select_keyboard( $rows, $search ) {
+    $token = telegrambot_search_token( $search );
+    $keyboard = array();
+    foreach( $rows as $row ) {
+        $keyboard[] = array(
+            array( 'text' => $row->keyword, 'callback_data' => 'sel:' . $token . '|' . $row->keyword ),
+        );
+    }
+    return $keyboard;
+}
+
 function telegrambot_cmd_links( $search ) {
     $rows = telegrambot_fetch_links( $search );
     if( !$rows ) {
@@ -304,29 +408,36 @@ function telegrambot_cmd_links( $search ) {
     }
     $header = $search !== '' ? 'Links matching "' . htmlspecialchars( $search ) . '"' : 'Recent links';
     $text = '<b>' . $header . "</b>\n\n" . telegrambot_links_text( $rows );
-
-    $keyboard = array();
-    foreach( $rows as $row ) {
-        $keyboard[] = array(
-            array( 'text' => $row->keyword, 'callback_data' => 'sel:' . $row->keyword ),
-        );
-    }
-    telegrambot_send( $text, array( 'inline_keyboard' => $keyboard ) );
+    telegrambot_send( $text, array( 'inline_keyboard' => telegrambot_select_keyboard( $rows, $search ) ) );
 }
 
-function telegrambot_cmd_select( $keyword ) {
-    if( !yourls_keyword_is_taken( $keyword ) ) {
-        telegrambot_send( 'Unknown keyword: ' . htmlspecialchars( $keyword ) );
-        return;
-    }
-    telegrambot_send(
-        '<b>' . htmlspecialchars( $keyword ) . '</b>',
-        array( 'inline_keyboard' => array( array(
+function telegrambot_action_keyboard( $keyword, $search ) {
+    return array(
+        array(
             array( 'text' => 'View',   'callback_data' => 'lview:'   . $keyword ),
             array( 'text' => 'Update', 'callback_data' => 'lupd:'    . $keyword ),
             array( 'text' => 'Delete', 'callback_data' => 'ldelask:' . $keyword ),
-        ) ) )
+        ),
+        array(
+            array( 'text' => "\xe2\x86\x90 Back to list", 'callback_data' => 'back:' . telegrambot_search_token( $search ) ),
+        ),
     );
+}
+
+function telegrambot_cmd_select( $chat_id, $message_id, $search_token, $keyword ) {
+    $search = $search_token === '_' ? '' : $search_token;
+    if( !yourls_keyword_is_taken( $keyword ) ) {
+        $rows = telegrambot_fetch_links( $search );
+        telegrambot_edit_markup( $chat_id, $message_id, array( 'inline_keyboard' => telegrambot_select_keyboard( $rows, $search ) ) );
+        return;
+    }
+    telegrambot_edit_markup( $chat_id, $message_id, array( 'inline_keyboard' => telegrambot_action_keyboard( $keyword, $search ) ) );
+}
+
+function telegrambot_cmd_back( $chat_id, $message_id, $search_token ) {
+    $search = $search_token === '_' ? '' : $search_token;
+    $rows = telegrambot_fetch_links( $search );
+    telegrambot_edit_markup( $chat_id, $message_id, array( 'inline_keyboard' => telegrambot_select_keyboard( $rows, $search ) ) );
 }
 
 function telegrambot_cmd_stats( $keyword ) {
@@ -358,15 +469,15 @@ function telegrambot_cmd_delete_confirm( $keyword ) {
 }
 
 function telegrambot_cmd_apply_update( $keyword, $new_url ) {
-    yourls_update_option( TELEGRAMBOT_OPTION_PENDING, '' );
+    telegrambot_pending_clear();
 
     if( !yourls_keyword_is_taken( $keyword ) ) {
         telegrambot_send( 'That link is gone now: ' . htmlspecialchars( $keyword ) );
         return;
     }
-    if( !filter_var( $new_url, FILTER_VALIDATE_URL ) || !preg_match( '#^https?://#i', $new_url ) ) {
+    if( !telegrambot_is_valid_url( $new_url ) ) {
         // put it back so they can just resend without tapping Update again
-        yourls_update_option( TELEGRAMBOT_OPTION_PENDING, $keyword );
+        telegrambot_pending_set( array( 'type' => 'update', 'keyword' => $keyword ) );
         telegrambot_send( 'Not a valid http(s) URL. Send the new target URL for <b>' . htmlspecialchars( $keyword ) . '</b> (or /cancel).' );
         return;
     }
@@ -381,10 +492,11 @@ function telegrambot_cmd_apply_update( $keyword, $new_url ) {
 }
 
 function telegrambot_handle_callback( $callback_query, $admin_chat_id ) {
-    $token    = yourls_get_option( TELEGRAMBOT_OPTION_TOKEN );
-    $chat_id  = isset( $callback_query['message']['chat']['id'] ) ? (string) $callback_query['message']['chat']['id'] : '';
-    $data     = isset( $callback_query['data'] ) ? $callback_query['data'] : '';
-    $query_id = isset( $callback_query['id'] ) ? $callback_query['id'] : '';
+    $token      = yourls_get_option( TELEGRAMBOT_OPTION_TOKEN );
+    $chat_id    = isset( $callback_query['message']['chat']['id'] ) ? (string) $callback_query['message']['chat']['id'] : '';
+    $message_id = isset( $callback_query['message']['message_id'] ) ? $callback_query['message']['message_id'] : null;
+    $data       = isset( $callback_query['data'] ) ? $callback_query['data'] : '';
+    $query_id   = isset( $callback_query['id'] ) ? $callback_query['id'] : '';
 
     if( !hash_equals( (string) $admin_chat_id, $chat_id ) ) {
         return;
@@ -407,8 +519,15 @@ function telegrambot_handle_callback( $callback_query, $admin_chat_id ) {
         }
         return;
     }
-    if( strpos( $data, 'sel:' ) === 0 ) {
-        telegrambot_cmd_select( substr( $data, 4 ) );
+    if( $message_id !== null && strpos( $data, 'sel:' ) === 0 ) {
+        $parts = explode( '|', substr( $data, 4 ), 2 );
+        if( count( $parts ) === 2 ) {
+            telegrambot_cmd_select( $chat_id, $message_id, $parts[0], $parts[1] );
+        }
+        return;
+    }
+    if( $message_id !== null && strpos( $data, 'back:' ) === 0 ) {
+        telegrambot_cmd_back( $chat_id, $message_id, substr( $data, 5 ) );
         return;
     }
     if( strpos( $data, 'lview:' ) === 0 ) {
@@ -425,7 +544,7 @@ function telegrambot_handle_callback( $callback_query, $admin_chat_id ) {
             telegrambot_send( 'Unknown keyword: ' . htmlspecialchars( $keyword ) );
             return;
         }
-        yourls_update_option( TELEGRAMBOT_OPTION_PENDING, $keyword );
+        telegrambot_pending_set( array( 'type' => 'update', 'keyword' => $keyword ) );
         telegrambot_send( 'Send the new target URL for <b>' . htmlspecialchars( $keyword ) . '</b> (or /cancel).' );
     }
 }

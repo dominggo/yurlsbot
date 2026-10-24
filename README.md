@@ -1,6 +1,6 @@
 # YOURLS Telegram Bot
 
-Manage your [YOURLS](https://yourls.org) short links from Telegram: shorten, list, view, update, delete — from one admin chat.
+Manage your [YOURLS](https://yourls.org) short links from Telegram: shorten, list, view, update, delete — from one admin chat. Just paste a URL and it'll guide you through the rest.
 
 ## Install
 
@@ -17,16 +17,17 @@ Manage your [YOURLS](https://yourls.org) short links from Telegram: shorten, lis
 
 | Command | What it does |
 |---|---|
-| `/short <url> [keyword]` | Shortens a URL; keyword is optional (YOURLS generates one if omitted) |
-| `/links [search]` | Shows the 10 most recent links, or matching links if you give a search term, as a bullet list with clickable short links and click counts. Each link also has its own button below — tap it to get **View** / **Update** / **Delete** buttons for just that one link |
+| *(just send a URL)* | Checked against a real URL format; if it passes, the bot asks for a keyword as your next message (or `/skip` to auto-generate one, or `/cancel`). If it fails the format check, the bot tells you and nothing is created |
+| `/short <url> [keyword]` | Shortens a URL in one message; keyword is optional (YOURLS generates one if omitted) |
+| `/links [search]` | Shows the 10 most recent links, or matching links if you give a search term, as a bullet list with clickable short links and click counts. Each link also has its own button below — tap it to swap to **View** / **Update** / **Delete** buttons for just that one link, in the same message (no extra chat clutter), with a **← Back to list** button to return |
 | `/stats <keyword>` | Clicks, target URL and creation date for one link |
 | `/delete <keyword>` | Asks you to confirm (inline Yes/Cancel buttons), then deletes |
-| `/cancel` | Cancels an in-progress Update (after tapping a link's Update button) |
+| `/cancel` | Cancels an in-progress Add (after sending a bare URL) or Update (after tapping a link's Update button) |
 | `/help` (or `/start`) | Shows the command list inside Telegram |
 
-Tapping **Update** on a link asks you to send the new target URL as your next message (or `/cancel`) — no need to retype the command or keyword.
+Tapping **Update** on a link, or just sending a bare URL to add one, asks for its next piece (a new URL, or a keyword) as your very next message — no need to retype anything you already sent, and `/cancel` backs out any time.
 
-Only the chat id you configured gets a reply — the bot is silent to everyone else, including group chats it might be added to.
+Only the chat id you configured gets a reply. A message that's neither a known command nor something awaited by an in-progress Add/Update is treated as an attempt to add a link: if it looks like a URL the guided-add flow starts, otherwise the bot explains that it isn't a valid URL. The bot stays completely silent to anyone other than the configured chat id, including group chats it might be added to.
 
 ## How it works
 
